@@ -1,7 +1,40 @@
 use std::iter;
+use wgpu::util::DeviceExt;
 use winit::event::{ElementState, KeyEvent, WindowEvent};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::Window;
+
+unsafe impl bytemuck::Pod for Vertex {}
+unsafe impl bytemuck::Zeroable for Vertex {}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug)]
+struct Vertex {
+    position: [f32; 3],
+    color: [f32; 3],
+}
+
+impl Vertex {
+    const ATTRIBS: [wgpu::VertexAttribute; 2] =
+        wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3];
+
+    fn desc() -> wgpu::VertexBufferLayout<'static> {
+        use std::mem;
+
+        wgpu::VertexBufferLayout {
+            array_stride: mem::size_of::<Self>() as wgpu::BufferAddress,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &Self::ATTRIBS,
+        }
+    }
+}
+
+
+const VERTICES: &[Vertex] = &[
+    Vertex { position: [0.0, 0.5, 0.0], color: [1.0, 0.0, 0.0] },
+    Vertex { position: [-0.5, -0.5, 0.0], color: [0.0, 1.0, 0.0] },
+    Vertex { position: [0.5, -0.5, 0.0], color: [0.0, 0.0, 1.0] },
+];
 
 pub struct State<'a> {
     surface: wgpu::Surface<'a>,
@@ -17,6 +50,8 @@ pub struct State<'a> {
     render_pipeline: wgpu::RenderPipeline,
     render_pipeline2: wgpu::RenderPipeline,
     use_secondary_pipeline: bool,
+    vertex_buffer: wgpu::Buffer,
+    num_vertices: u32,
 }
 
 impl<'a> State<'a> {
@@ -90,15 +125,17 @@ impl<'a> State<'a> {
             layout: Some(&render_pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &shader,
-                entry_point: "vs_main", // 1.
+                entry_point: "vs_main",
                 compilation_options: Default::default(),
-                buffers: &[], // 2.
+                buffers: &[
+                    Vertex::desc(),
+                ],
             },
-            fragment: Some(wgpu::FragmentState { // 3.
+            fragment: Some(wgpu::FragmentState {
                 module: &shader,
                 entry_point: "fs_main",
                 compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState { // 4.
+                targets: &[Some(wgpu::ColorTargetState {
                     format: config.format,
                     blend: Some(wgpu::BlendState::REPLACE),
                     write_mask: wgpu::ColorWrites::ALL,
@@ -165,6 +202,16 @@ impl<'a> State<'a> {
             multiview: None, // 5.
         });
 
+        let vertex_buffer = device.create_buffer_init(
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("Vertex Buffer"),
+                contents: bytemuck::cast_slice(VERTICES),
+                usage: wgpu::BufferUsages::VERTEX,
+            }
+        );
+
+        let num_vertices = VERTICES.len() as u32;
+
         Self {
             surface,
             device,
@@ -181,6 +228,8 @@ impl<'a> State<'a> {
             render_pipeline,
             render_pipeline2,
             use_secondary_pipeline: false,
+            vertex_buffer,
+            num_vertices,
         }
     }
 
@@ -274,12 +323,13 @@ impl<'a> State<'a> {
 
             if self.use_secondary_pipeline {
                 render_pass.set_pipeline(&self.render_pipeline2);
+                render_pass.draw(0..3, 0..1); // 3.
             }
             else {
                 render_pass.set_pipeline(&self.render_pipeline);
+                render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+                render_pass.draw(0..self.num_vertices, 0..1);
             }
-
-            render_pass.draw(0..3, 0..1); // 3.
         }
 
         self.queue.submit(iter::once(encoder.finish()));
