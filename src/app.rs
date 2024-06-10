@@ -19,6 +19,8 @@ struct State<'a> {
     window: &'a Window,
     color: wgpu::Color,
     render_pipeline: wgpu::RenderPipeline,
+    render_pipeline2: wgpu::RenderPipeline,
+    use_secondary_pipeline: bool,
 }
 
 impl<'a> State<'a> {
@@ -78,6 +80,7 @@ impl<'a> State<'a> {
         };
 
         let shader = device.create_shader_module(wgpu::include_wgsl!("content/shaders/RustDx.wgsl"));
+        let shader2 = device.create_shader_module(wgpu::include_wgsl!("content/shaders/RustDx2.wgsl"));
 
         let render_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -126,6 +129,46 @@ impl<'a> State<'a> {
             multiview: None, // 5.
         });
 
+        let render_pipeline2 = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Render Pipeline2"),
+            layout: Some(&render_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader2,
+                entry_point: "vs_main", // 1.
+                compilation_options: Default::default(),
+                buffers: &[], // 2.
+            },
+            fragment: Some(wgpu::FragmentState { // 3.
+                module: &shader2,
+                entry_point: "fs_main",
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState { // 4.
+                    format: config.format,
+                    blend: Some(wgpu::BlendState::REPLACE),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList, // 1.
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw, // 2.
+                cull_mode: Some(wgpu::Face::Back),
+                // Setting this to anything other than Fill requires Features::NON_FILL_POLYGON_MODE
+                polygon_mode: wgpu::PolygonMode::Fill,
+                // Requires Features::DEPTH_CLIP_CONTROL
+                unclipped_depth: false,
+                // Requires Features::CONSERVATIVE_RASTERIZATION
+                conservative: false,
+            },
+            depth_stencil: None, // 1.
+            multisample: wgpu::MultisampleState {
+                count: 1, // 2.
+                mask: !0, // 3.
+                alpha_to_coverage_enabled: false, // 4.
+            },
+            multiview: None, // 5.
+        });
+
         Self {
             surface,
             device,
@@ -140,6 +183,8 @@ impl<'a> State<'a> {
                 a: 1.0,
             },
             render_pipeline,
+            render_pipeline2,
+            use_secondary_pipeline: false,
         }
     }
 
@@ -163,12 +208,13 @@ impl<'a> State<'a> {
                 event:
                 KeyEvent {
                     state: ElementState::Pressed,
-                    physical_key: PhysicalKey::Code(KeyCode::Escape),
+                    physical_key: PhysicalKey::Code(KeyCode::Space),
                     ..
                 }, ..
             } => {
                 // Handle keyboard input
-                false
+                self.use_secondary_pipeline = !self.use_secondary_pipeline;
+                true
             }
             WindowEvent::MouseWheel { delta, .. } => {
                 // Handle mouse wheel input
@@ -230,7 +276,13 @@ impl<'a> State<'a> {
                 occlusion_query_set: None,
             });
 
-            render_pass.set_pipeline(&self.render_pipeline); // 2.
+            if(self.use_secondary_pipeline) {
+                render_pass.set_pipeline(&self.render_pipeline2);
+            }
+            else {
+                render_pass.set_pipeline(&self.render_pipeline);
+            }
+
             render_pass.draw(0..3, 0..1); // 3.
         }
 
