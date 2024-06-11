@@ -493,6 +493,10 @@ impl<'a> State<'a> {
                             "Mouse Position: ({:.1},{:.1})",
                             mouse_pos[0], mouse_pos[1]
                         ));
+                        ui.text(format!(
+                            "Camera Position: ({:.1},{:.1},{:.1})",
+                            self.camera.eye[0], self.camera.eye[1], self.camera.eye[2]
+                        ));
                     });
             }
 

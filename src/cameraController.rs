@@ -1,5 +1,4 @@
 use winit::event::{ElementState, KeyEvent, WindowEvent};
-use winit::event::WindowEvent::KeyboardInput;
 use winit::keyboard::{KeyCode, PhysicalKey};
 use crate::camera::Camera;
 
