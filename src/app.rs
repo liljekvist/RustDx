@@ -27,6 +27,7 @@ pub async fn run() {
 
     event_loop
         .run(move |event, control_flow| {
+            state.imgui_handle_event(&event);
             match event {
                 Event::WindowEvent {
                     ref event,
@@ -84,4 +85,6 @@ pub async fn run() {
             }
         })
         .unwrap();
+
+
 }
