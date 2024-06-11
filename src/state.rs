@@ -381,6 +381,7 @@ impl<'a> State<'a> {
                 let fps = 1.0 / delta_s.as_secs_f64();
                 window
                     .size([300.0, 100.0], Condition::FirstUseEver)
+                    .position([1.0, 1.0], Condition::FirstUseEver)
                     .build(|| {
                         ui.text(format!(
                             "FPS: {:.1}",
