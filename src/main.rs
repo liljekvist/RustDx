@@ -1,8 +1,7 @@
 mod app;
 mod state;
-mod texture;
-mod camera;
-mod cameraController;
+mod structs;
+mod controllers;
 
 use app::run;
 
