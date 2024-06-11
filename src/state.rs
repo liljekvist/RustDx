@@ -6,26 +6,40 @@ use wgpu::util::DeviceExt;
 use winit::event::{ElementState, KeyEvent, WindowEvent};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::Window;
+use cgmath::prelude::*;
 
 use crate::structs::texture::Texture;
 use crate::structs::camera::Camera;
 use crate::controllers::camera_controller::CameraController;
 use crate::structs::vertex::Vertex;
 use crate::structs::camera_uniform::CameraUniform;
+use crate::structs::instance::Instance;
+use crate::structs::instance::InstanceRaw;
 
 const VERTICES: &[Vertex] = &[
-    Vertex { position: [-0.0868241, 0.49240386, 1.0], tex_coords: [0.4131759, 0.00759614], }, // A
-    Vertex { position: [-0.49513406, 0.06958647, 0.0], tex_coords: [0.0048659444, 0.43041354], }, // B
-    Vertex { position: [-0.21918549, -0.44939706, 1.0], tex_coords: [0.28081453, 0.949397], }, // C
-    Vertex { position: [0.35966998, -0.3473291, 0.0], tex_coords: [0.85967, 0.84732914], }, // D
-    Vertex { position: [0.44147372, 0.2347359, 1.0], tex_coords: [0.9414737, 0.2652641], }, // E
+    // cube inverted
+    Vertex { position: [ 0.5, -0.5,  0.5 ], tex_coords: [1.0, 0.0] }, // 0
+    Vertex { position: [ 0.5,  0.5,  0.5 ], tex_coords: [1.0, 1.0] }, // 1
+    Vertex { position: [-0.5,  0.5,  0.5 ], tex_coords: [0.0, 1.0] }, // 2
+    Vertex { position: [-0.5, -0.5,  0.5 ], tex_coords: [0.0, 0.0] }, // 3
+    Vertex { position: [ 0.5, -0.5, -0.5 ], tex_coords: [0.0, 0.0] }, // 4
+    Vertex { position: [ 0.5,  0.5, -0.5 ], tex_coords: [0.0, 1.0] }, // 5
+    Vertex { position: [-0.5,  0.5, -0.5 ], tex_coords: [1.0, 1.0] }, // 6
+    Vertex { position: [-0.5, -0.5, -0.5 ], tex_coords: [1.0, 0.0] }, // 7
 ];
 
 
 const INDICES: &[u16] = &[
-    0, 1, 4,
-    1, 2, 4,
-    2, 3, 4,
+    // cube inverted
+    0, 1, 2, 2, 3, 0, // front
+    1, 5, 6, 6, 2, 1, // right
+    7, 6, 5, 5, 4, 7, // back
+    4, 0, 3, 3, 7, 4, // left
+    4, 5, 1, 1, 0, 4, // bottom
+    3, 2, 6, 6, 7, 3, // top
+
+
+
 ];
 
 pub struct State<'a> {
@@ -45,6 +59,8 @@ pub struct State<'a> {
     camera_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
     camera_controller: CameraController,
+    instances: Vec<Instance>,
+    instance_buffer: wgpu::Buffer,
     // texture stuff
     #[allow(dead_code)]
     diffuse_texture: Texture,
@@ -62,6 +78,8 @@ pub struct State<'a> {
 impl<'a> State<'a> {
     pub async fn new(window: &'a Window) -> State<'a> {
         let size = window.inner_size();
+        const NUM_INSTANCES_PER_ROW: u32 = 10;
+        const INSTANCE_DISPLACEMENT: cgmath::Vector3<f32> = cgmath::Vector3::new(NUM_INSTANCES_PER_ROW as f32 * 0.5, 0.0, NUM_INSTANCES_PER_ROW as f32 * 0.5);
 
         // The instance is a handle to our GPU
         // BackendBit::PRIMARY => Vulkan + Metal + DX12 + Browser WebGPU
@@ -93,6 +111,33 @@ impl<'a> State<'a> {
             )
             .await
             .unwrap();
+
+        let instances = (0..NUM_INSTANCES_PER_ROW).flat_map(|z| {
+            (0..NUM_INSTANCES_PER_ROW).map(move |x| {
+                let position = cgmath::Vector3 { x: x as f32, y: 0.0, z: z as f32 } - INSTANCE_DISPLACEMENT;
+
+                let rotation = if position.is_zero() {
+                    // this is needed so an object at (0, 0, 0) won't get scaled to zero
+                    // as Quaternions can affect scale if they're not created correctly
+                    cgmath::Quaternion::from_axis_angle(cgmath::Vector3::unit_z(), cgmath::Deg(0.0))
+                } else {
+                    cgmath::Quaternion::from_axis_angle(position.normalize(), cgmath::Deg(45.0))
+                };
+
+                Instance {
+                    position, rotation,
+                }
+            })
+        }).collect::<Vec<_>>();
+
+        let instance_data = instances.iter().map(Instance::to_raw).collect::<Vec<_>>();
+        let instance_buffer = device.create_buffer_init(
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("Instance Buffer"),
+                contents: bytemuck::cast_slice(&instance_data),
+                usage: wgpu::BufferUsages::VERTEX,
+            }
+        );
 
         let surface_caps = surface.get_capabilities(&adapter);
         // Shader code in this tutorial assumes an Srgb surface texture. Using a different
@@ -263,9 +308,7 @@ impl<'a> State<'a> {
                 module: &shader,
                 entry_point: "vs_main",
                 compilation_options: Default::default(),
-                buffers: &[
-                    Vertex::desc(),
-                ],
+                buffers: &[Vertex::desc(), InstanceRaw::desc()],
             },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
@@ -335,6 +378,8 @@ impl<'a> State<'a> {
             camera_buffer,
             camera_bind_group,
             camera_controller,
+            instances,
+            instance_buffer,
             render_pipeline,
             vertex_buffer,
             index_buffer,
@@ -498,9 +543,11 @@ impl<'a> State<'a> {
             render_pass.set_bind_group(0, &self.diffuse_bind_group, &[]);
             render_pass.set_bind_group(1, &self.camera_bind_group, &[]);
             render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+            render_pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
             render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
 
-            render_pass.draw_indexed(0..self.num_indices, 0, 0..1);
+            render_pass.draw_indexed(0..self.num_indices, 0, 0..self.instances.len() as _);
+
             self.imgui_renderer
                 .render(self.imgui.render(), &self.queue, &self.device, &mut render_pass)
                 .expect("Rendering failed");
