@@ -7,7 +7,7 @@ use winit::event::{ElementState, KeyEvent, WindowEvent};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::Window;
 use cgmath::prelude::*;
-use wgpu::StoreOp;
+use wgpu::{CommandEncoder, StoreOp, TextureView};
 
 use crate::structs::texture::Texture;
 use crate::structs::camera::Camera;
@@ -468,49 +468,6 @@ impl<'a> State<'a> {
 
 
     pub fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
-
-        if self.show_overlay {
-            let delta_s = self.last_frame.elapsed();
-            let now = Instant::now();
-            self.imgui.io_mut().update_delta_time(now - self.last_frame);
-            self.last_frame = now;
-
-            self.platform
-                .prepare_frame(self.imgui.io_mut(), &self.window)
-                .expect("Failed to prepare frame");
-            let ui = self.imgui.frame();
-
-            {
-                let window = ui.window("Debug info");
-                let fps = 1.0 / delta_s.as_secs_f64();
-                window
-                    .size([300.0, 100.0], Condition::FirstUseEver)
-                    .position([1.0, 1.0], Condition::FirstUseEver)
-                    .build(|| {
-                        ui.text(format!(
-                            "FPS: {:.1}",
-                            fps
-                        ));
-                        ui.separator();
-                        let mouse_pos = ui.io().mouse_pos;
-                        ui.text(format!(
-                            "Mouse Position: ({:.1},{:.1})",
-                            mouse_pos[0], mouse_pos[1]
-                        ));
-                        ui.text(format!(
-                            "Camera Position: ({:.1},{:.1},{:.1})",
-                            self.camera.eye[0], self.camera.eye[1], self.camera.eye[2]
-                        ));
-                    });
-            }
-
-            if self.last_cursor != ui.mouse_cursor() {
-                self.last_cursor = ui.mouse_cursor();
-                self.platform.prepare_render(ui, &self.window);
-            }
-        }
-
-
         let frame = match self.surface.get_current_texture() {
             Ok(frame) => frame,
             Err(e) => {
@@ -524,12 +481,6 @@ impl<'a> State<'a> {
             .create_view(&wgpu::TextureViewDescriptor::default());
 
         let mut encoder = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Render Encoder"),
-            });
-
-        let mut imgui_encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("Render Encoder"),
@@ -573,8 +524,60 @@ impl<'a> State<'a> {
             render_pass.draw_indexed(0..self.num_indices, 0, 0..self.instances.len() as _);
         }
 
+        self.gen_imgui_render_pass(&mut encoder, view);
+
+        self.queue.submit(iter::once(encoder.finish()));
+        frame.present();
+
+        Ok(())
+    }
+
+    pub fn imgui_handle_event(&mut self, event: &winit::event::Event<()>) {
+        self.platform.handle_event(self.imgui.io_mut(), &self.window, event);
+    }
+
+    pub fn gen_imgui_render_pass(&mut self, encoder: &mut CommandEncoder, view: TextureView) {
         if self.show_overlay
         {
+            let delta_s = self.last_frame.elapsed();
+            let now = Instant::now();
+            self.imgui.io_mut().update_delta_time(now - self.last_frame);
+            self.last_frame = now;
+
+            self.platform
+                .prepare_frame(self.imgui.io_mut(), &self.window)
+                .expect("Failed to prepare frame");
+            let ui = self.imgui.frame();
+
+            {
+                let window = ui.window("Debug info");
+                let fps = 1.0 / delta_s.as_secs_f64();
+                window
+                    .size([300.0, 100.0], Condition::FirstUseEver)
+                    .position([1.0, 1.0], Condition::FirstUseEver)
+                    .build(|| {
+                        ui.text(format!(
+                            "FPS: {:.1}",
+                            fps
+                        ));
+                        ui.separator();
+                        let mouse_pos = ui.io().mouse_pos;
+                        ui.text(format!(
+                            "Mouse Position: ({:.1},{:.1})",
+                            mouse_pos[0], mouse_pos[1]
+                        ));
+                        ui.text(format!(
+                            "Camera Position: ({:.1},{:.1},{:.1})",
+                            self.camera.eye[0], self.camera.eye[1], self.camera.eye[2]
+                        ));
+                    });
+            }
+
+            if self.last_cursor != ui.mouse_cursor() {
+                self.last_cursor = ui.mouse_cursor();
+                self.platform.prepare_render(ui, &self.window);
+            }
+
             let mut imgui_render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Imgui Render Pass"),
                 color_attachments: &[
@@ -597,15 +600,5 @@ impl<'a> State<'a> {
                 .render(self.imgui.render(), &self.queue, &self.device, &mut imgui_render_pass)
                 .expect("Rendering failed");
         }
-
-        self.queue.submit(iter::once(encoder.finish()));
-        self.queue.submit(iter::once(imgui_encoder.finish()));
-        frame.present();
-
-        Ok(())
-    }
-
-    pub fn imgui_handle_event(&mut self, event: &winit::event::Event<()>) {
-        self.platform.handle_event(self.imgui.io_mut(), &self.window, event);
     }
 }

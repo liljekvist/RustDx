@@ -4,7 +4,7 @@ pub(crate) mod vertex;
 pub(crate) mod camera_uniform;
 pub(crate) mod instance;
 
-
+#[allow(dead_code)]
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Hash, Eq, PartialEq)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
