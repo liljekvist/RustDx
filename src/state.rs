@@ -7,6 +7,7 @@ use winit::event::{ElementState, KeyEvent, WindowEvent};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::Window;
 use cgmath::prelude::*;
+use wgpu::StoreOp;
 
 use crate::structs::texture::Texture;
 use crate::structs::camera::Camera;
@@ -37,9 +38,6 @@ const INDICES: &[u16] = &[
     4, 0, 3, 3, 7, 4, // left
     4, 5, 1, 1, 0, 4, // bottom
     3, 2, 6, 6, 7, 3, // top
-
-
-
 ];
 
 pub struct State<'a> {
@@ -66,6 +64,7 @@ pub struct State<'a> {
     diffuse_texture: Texture,
     pub diffuse_bind_group: wgpu::BindGroup,
     pub window: &'a Window,
+    depth_texture: Texture,
     // imgui stuff
     imgui: imgui::Context,
     platform: imgui_winit_support::WinitPlatform,
@@ -80,6 +79,7 @@ impl<'a> State<'a> {
         let size = window.inner_size();
         const NUM_INSTANCES_PER_ROW: u32 = 10;
         const INSTANCE_DISPLACEMENT: cgmath::Vector3<f32> = cgmath::Vector3::new(NUM_INSTANCES_PER_ROW as f32 * 0.5, 0.0, NUM_INSTANCES_PER_ROW as f32 * 0.5);
+
 
         // The instance is a handle to our GPU
         // BackendBit::PRIMARY => Vulkan + Metal + DX12 + Browser WebGPU
@@ -192,6 +192,8 @@ impl<'a> State<'a> {
         let last_frame = Instant::now();
 
         let last_cursor = None;
+
+        let depth_texture = Texture::create_depth_texture(&device, &config, "depth_texture");
 
         let diffuse_bytes = include_bytes!("content/img/grass.png");
         let diffuse_texture =
@@ -332,7 +334,13 @@ impl<'a> State<'a> {
                 // Requires Features::CONSERVATIVE_RASTERIZATION
                 conservative: false,
             },
-            depth_stencil: None, // 1.
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: Texture::DEPTH_FORMAT,
+                depth_write_enabled: true,
+                depth_compare: wgpu::CompareFunction::Less, // 1.
+                stencil: wgpu::StencilState::default(), // 2.
+                bias: wgpu::DepthBiasState::default(),
+            }), // 1.
             multisample: wgpu::MultisampleState {
                 count: 1, // 2.
                 mask: !0, // 3.
@@ -367,6 +375,7 @@ impl<'a> State<'a> {
             config,
             size,
             window,
+            depth_texture,
             color: wgpu::Color {
                 r: 0.6,
                 g: 0.2,
@@ -406,6 +415,8 @@ impl<'a> State<'a> {
             self.config.height = new_size.height;
             self.surface.configure(&self.device, &self.config);
         }
+        self.depth_texture = Texture::create_depth_texture(&self.device, &self.config, "depth_texture");
+
     }
 
     #[allow(unused_variables)]
@@ -518,6 +529,12 @@ impl<'a> State<'a> {
                 label: Some("Render Encoder"),
             });
 
+        let mut imgui_encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Render Encoder"),
+            });
+
         {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Render Pass"),
@@ -534,7 +551,14 @@ impl<'a> State<'a> {
                         }
                     })
                 ],
-                depth_stencil_attachment: None,
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &self.depth_texture.view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
                 timestamp_writes: None,
                 occlusion_query_set: None,
             });
@@ -547,14 +571,35 @@ impl<'a> State<'a> {
             render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
 
             render_pass.draw_indexed(0..self.num_indices, 0, 0..self.instances.len() as _);
+        }
+
+        if self.show_overlay
+        {
+            let mut imgui_render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Imgui Render Pass"),
+                color_attachments: &[
+                    // This is what @location(0) in the fragment shader targets
+                    Some(wgpu::RenderPassColorAttachment {
+                        view: &view,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Load,
+                            store: StoreOp::Discard,
+                        }
+                    })
+                ],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
 
             self.imgui_renderer
-                .render(self.imgui.render(), &self.queue, &self.device, &mut render_pass)
+                .render(self.imgui.render(), &self.queue, &self.device, &mut imgui_render_pass)
                 .expect("Rendering failed");
-            
         }
 
         self.queue.submit(iter::once(encoder.finish()));
+        self.queue.submit(iter::once(imgui_encoder.finish()));
         frame.present();
 
         Ok(())
